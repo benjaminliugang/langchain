@@ -1,4 +1,4 @@
-"""LangSmith utilities.
+"""**LangSmith** utilities.
 
 This module provides utilities for connecting to `LangSmith <https://smith.langchain.com/>`_. For more information on LangSmith, see the `LangSmith documentation <https://docs.smith.langchain.com/>`_.
 
@@ -97,6 +97,5 @@ from langchain.smith.evaluation import (
 __all__ = [
     "arun_on_dataset",
     "run_on_dataset",
-    "ChoicesOutputParser",
     "RunEvalConfig",
 ]
