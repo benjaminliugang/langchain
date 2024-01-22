@@ -189,6 +189,7 @@ class OpenAICallbackHandler(BaseCallbackHandler):
         completion_tokens = token_usage.get("completion_tokens", 0)
         prompt_tokens = token_usage.get("prompt_tokens", 0)
         model_name = standardize_model_name(response.llm_output.get("model_name", ""))
+        # TODO Remove the following test log
         print(f"Report metrics cost issue check: {model_name}, {response.llm_output.get('model_name', '')}, {model_name in MODEL_COST_PER_1K_TOKENS}") # noqa: E501
         if model_name in MODEL_COST_PER_1K_TOKENS:
             completion_cost = get_openai_token_cost_for_model(
@@ -196,6 +197,7 @@ class OpenAICallbackHandler(BaseCallbackHandler):
             )
             prompt_cost = get_openai_token_cost_for_model(model_name, prompt_tokens)
             self.total_cost += prompt_cost + completion_cost
+            # TODO Remove the following test log
             print(f"Report metrics cost issue check: completion_cost {completion_cost}, prompt_cost {prompt_cost}, total_cost {self.total_cost}") # noqa: E501
         self.total_tokens += token_usage.get("total_tokens", 0)
         self.prompt_tokens += prompt_tokens
