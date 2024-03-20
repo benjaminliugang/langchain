@@ -422,7 +422,7 @@ class ChatOpenAI(BaseChatModel):
                 message=chunk, generation_info=generation_info
             )
             if run_manager:
-                run_manager.on_llm_new_token(chunk.text, chunk=chunk, status=streaming_status) # noqa: E501
+                run_manager.on_llm_new_token(cg_chunk.text, chunk=cg_chunk, status=streaming_status) # noqa: E501
                 if streaming_status.aborted is True:
                     break
             yield cg_chunk
