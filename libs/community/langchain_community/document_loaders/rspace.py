@@ -66,7 +66,7 @@ class RSpaceLoader(BaseLoader):
 
         except Exception:
             raise Exception(
-                f"Unable to initialise client - is url {self.url} or "
+                f"Unable to initialize client - is url {self.url} or "
                 f"api key  correct?"
             )
 
@@ -124,6 +124,3 @@ class RSpaceLoader(BaseLoader):
                 yield d
         else:
             raise ValueError("Unknown global ID type")
-
-    def load(self) -> List[Document]:
-        return list(self.lazy_load())

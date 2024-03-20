@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Union
+from typing import Dict, Iterator, Union
 
 from langchain_core.documents import Document
 
@@ -18,7 +18,7 @@ class BSHTMLLoader(BaseLoader):
         bs_kwargs: Union[dict, None] = None,
         get_text_separator: str = "",
     ) -> None:
-        """Initialise with path, and optionally, file encoding to use, and any kwargs
+        """initialize with path, and optionally, file encoding to use, and any kwargs
         to pass to the BeautifulSoup object.
 
         Args:
@@ -42,7 +42,7 @@ class BSHTMLLoader(BaseLoader):
         self.bs_kwargs = bs_kwargs
         self.get_text_separator = get_text_separator
 
-    def load(self) -> List[Document]:
+    def lazy_load(self) -> Iterator[Document]:
         """Load HTML document into document objects."""
         from bs4 import BeautifulSoup
 
@@ -60,4 +60,4 @@ class BSHTMLLoader(BaseLoader):
             "source": self.file_path,
             "title": title,
         }
-        return [Document(page_content=text, metadata=metadata)]
+        yield Document(page_content=text, metadata=metadata)
