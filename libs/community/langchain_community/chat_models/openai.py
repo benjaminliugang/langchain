@@ -65,6 +65,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class StreamingStatus:
+    aborted:bool = False
+
+    def abort(self):
+        self.aborted = True
+
 def _import_tiktoken() -> Any:
     try:
         import tiktoken
@@ -396,6 +402,7 @@ class ChatOpenAI(BaseChatModel):
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
 
+        streaming_status = StreamingStatus()
         default_chunk_class = AIMessageChunk
         for chunk in self.completion_with_retry(
             messages=message_dicts, run_manager=run_manager, **params
@@ -417,7 +424,9 @@ class ChatOpenAI(BaseChatModel):
                 message=chunk, generation_info=generation_info
             )
             if run_manager:
-                run_manager.on_llm_new_token(cg_chunk.text, chunk=cg_chunk)
+                run_manager.on_llm_new_token(cg_chunk.text, chunk=cg_chunk, status=streaming_status) # noqa: E501
+                if streaming_status.aborted is True:
+                    break
             yield cg_chunk
 
     def _generate(
