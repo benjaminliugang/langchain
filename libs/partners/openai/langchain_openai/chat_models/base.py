@@ -88,6 +88,11 @@ from langchain_core.utils.utils import build_extra_kwargs
 
 logger = logging.getLogger(__name__)
 
+class StreamingStatus:
+    aborted:bool = False
+
+    def abort(self):
+        self.aborted = True
 
 def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
     """Convert a dictionary to a LangChain message.
@@ -484,6 +489,7 @@ class BaseChatOpenAI(BaseChatModel):
         kwargs["stream"] = True
         payload = self._get_request_payload(messages, stop=stop, **kwargs)
         default_chunk_class: Type[BaseMessageChunk] = AIMessageChunk
+        streaming_status = StreamingStatus()
         with self.client.create(**payload) as response:
             for chunk in response:
                 if not isinstance(chunk, dict):
@@ -527,8 +533,10 @@ class BaseChatOpenAI(BaseChatModel):
                     )
                 if run_manager:
                     run_manager.on_llm_new_token(
-                        generation_chunk.text, chunk=generation_chunk, logprobs=logprobs
+                        generation_chunk.text, chunk=generation_chunk, logprobs=logprobs, status=streaming_status
                     )
+                    if streaming_status.aborted is True:
+                        break
                 yield generation_chunk
 
     def _generate(
