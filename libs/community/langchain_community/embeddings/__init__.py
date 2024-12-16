@@ -145,11 +145,17 @@ if TYPE_CHECKING:
     from langchain_community.embeddings.mlflow_gateway import (
         MlflowAIGatewayEmbeddings,
     )
+    from langchain_community.embeddings.model2vec import (
+        Model2vecEmbeddings,
+    )
     from langchain_community.embeddings.modelscope_hub import (
         ModelScopeEmbeddings,
     )
     from langchain_community.embeddings.mosaicml import (
         MosaicMLInstructorEmbeddings,
+    )
+    from langchain_community.embeddings.naver import (
+        ClovaXEmbeddings,
     )
     from langchain_community.embeddings.nemo import (
         NeMoEmbeddings,
@@ -213,6 +219,9 @@ if TYPE_CHECKING:
     from langchain_community.embeddings.tensorflow_hub import (
         TensorflowHubEmbeddings,
     )
+    from langchain_community.embeddings.textembed import (
+        TextEmbedEmbeddings,
+    )
     from langchain_community.embeddings.titan_takeoff import (
         TitanTakeoffEmbed,
     )
@@ -247,6 +256,7 @@ __all__ = [
     "BookendEmbeddings",
     "ClarifaiEmbeddings",
     "ClovaEmbeddings",
+    "ClovaXEmbeddings",
     "CohereEmbeddings",
     "DashScopeEmbeddings",
     "DatabricksEmbeddings",
@@ -282,6 +292,7 @@ __all__ = [
     "MlflowAIGatewayEmbeddings",
     "MlflowCohereEmbeddings",
     "MlflowEmbeddings",
+    "Model2vecEmbeddings",
     "ModelScopeEmbeddings",
     "MosaicMLInstructorEmbeddings",
     "NLPCloudEmbeddings",
@@ -308,6 +319,7 @@ __all__ = [
     "SpacyEmbeddings",
     "SparkLLMTextEmbeddings",
     "TensorflowHubEmbeddings",
+    "TextEmbedEmbeddings",
     "TitanTakeoffEmbed",
     "VertexAIEmbeddings",
     "VolcanoEmbeddings",
@@ -328,6 +340,7 @@ _module_lookup = {
     "BookendEmbeddings": "langchain_community.embeddings.bookend",
     "ClarifaiEmbeddings": "langchain_community.embeddings.clarifai",
     "ClovaEmbeddings": "langchain_community.embeddings.clova",
+    "ClovaXEmbeddings": "langchain_community.embeddings.naver",
     "CohereEmbeddings": "langchain_community.embeddings.cohere",
     "DashScopeEmbeddings": "langchain_community.embeddings.dashscope",
     "DatabricksEmbeddings": "langchain_community.embeddings.databricks",
@@ -363,6 +376,7 @@ _module_lookup = {
     "MlflowAIGatewayEmbeddings": "langchain_community.embeddings.mlflow_gateway",
     "MlflowCohereEmbeddings": "langchain_community.embeddings.mlflow",
     "MlflowEmbeddings": "langchain_community.embeddings.mlflow",
+    "Model2vecEmbeddings": "langchain_community.embeddings.model2vec",
     "ModelScopeEmbeddings": "langchain_community.embeddings.modelscope_hub",
     "MosaicMLInstructorEmbeddings": "langchain_community.embeddings.mosaicml",
     "NLPCloudEmbeddings": "langchain_community.embeddings.nlpcloud",
@@ -392,6 +406,7 @@ _module_lookup = {
     "VolcanoEmbeddings": "langchain_community.embeddings.volcengine",
     "VoyageEmbeddings": "langchain_community.embeddings.voyageai",
     "XinferenceEmbeddings": "langchain_community.embeddings.xinference",
+    "TextEmbedEmbeddings": "langchain_community.embeddings.textembed",
     "TitanTakeoffEmbed": "langchain_community.embeddings.titan_takeoff",
     "PremAIEmbeddings": "langchain_community.embeddings.premai",
     "YandexGPTEmbeddings": "langchain_community.embeddings.yandex",

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Iterator
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
-    Iterator,
     Optional,
     Union,
 )
@@ -17,6 +16,7 @@ from langchain_core.outputs import (
     Generation,
     GenerationChunk,
 )
+from langchain_core.runnables.config import run_in_executor
 
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
@@ -37,9 +37,13 @@ class BaseTransformOutputParser(BaseOutputParser[T]):
     ) -> AsyncIterator[T]:
         async for chunk in input:
             if isinstance(chunk, BaseMessage):
-                yield self.parse_result([ChatGeneration(message=chunk)])
+                yield await run_in_executor(
+                    None, self.parse_result, [ChatGeneration(message=chunk)]
+                )
             else:
-                yield self.parse_result([Generation(text=chunk)])
+                yield await run_in_executor(
+                    None, self.parse_result, [Generation(text=chunk)]
+                )
 
     def transform(
         self,
@@ -102,14 +106,15 @@ class BaseCumulativeTransformOutputParser(BaseTransformOutputParser[T]):
         Returns:
             The diff between the previous and current parsed output.
         """
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def _transform(self, input: Iterator[Union[str, BaseMessage]]) -> Iterator[Any]:
         prev_parsed = None
-        acc_gen = None
+        acc_gen: Union[GenerationChunk, ChatGenerationChunk, None] = None
         for chunk in input:
+            chunk_gen: Union[GenerationChunk, ChatGenerationChunk]
             if isinstance(chunk, BaseMessageChunk):
-                chunk_gen: Generation = ChatGenerationChunk(message=chunk)
+                chunk_gen = ChatGenerationChunk(message=chunk)
             elif isinstance(chunk, BaseMessage):
                 chunk_gen = ChatGenerationChunk(
                     message=BaseMessageChunk(**chunk.dict())
@@ -117,10 +122,7 @@ class BaseCumulativeTransformOutputParser(BaseTransformOutputParser[T]):
             else:
                 chunk_gen = GenerationChunk(text=chunk)
 
-            if acc_gen is None:
-                acc_gen = chunk_gen
-            else:
-                acc_gen = acc_gen + chunk_gen
+            acc_gen = chunk_gen if acc_gen is None else acc_gen + chunk_gen  # type: ignore[operator]
 
             parsed = self.parse_result([acc_gen], partial=True)
             if parsed is not None and parsed != prev_parsed:
@@ -134,10 +136,11 @@ class BaseCumulativeTransformOutputParser(BaseTransformOutputParser[T]):
         self, input: AsyncIterator[Union[str, BaseMessage]]
     ) -> AsyncIterator[T]:
         prev_parsed = None
-        acc_gen = None
+        acc_gen: Union[GenerationChunk, ChatGenerationChunk, None] = None
         async for chunk in input:
+            chunk_gen: Union[GenerationChunk, ChatGenerationChunk]
             if isinstance(chunk, BaseMessageChunk):
-                chunk_gen: Generation = ChatGenerationChunk(message=chunk)
+                chunk_gen = ChatGenerationChunk(message=chunk)
             elif isinstance(chunk, BaseMessage):
                 chunk_gen = ChatGenerationChunk(
                     message=BaseMessageChunk(**chunk.dict())
@@ -145,15 +148,12 @@ class BaseCumulativeTransformOutputParser(BaseTransformOutputParser[T]):
             else:
                 chunk_gen = GenerationChunk(text=chunk)
 
-            if acc_gen is None:
-                acc_gen = chunk_gen
-            else:
-                acc_gen = acc_gen + chunk_gen
+            acc_gen = chunk_gen if acc_gen is None else acc_gen + chunk_gen  # type: ignore[operator]
 
             parsed = await self.aparse_result([acc_gen], partial=True)
             if parsed is not None and parsed != prev_parsed:
                 if self.diff:
-                    yield self._diff(prev_parsed, parsed)
+                    yield await run_in_executor(None, self._diff, prev_parsed, parsed)
                 else:
                     yield parsed
                 prev_parsed = parsed

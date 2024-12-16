@@ -75,14 +75,15 @@ from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
     CallbackManagerForToolRun,
 )
-from langchain_core.pydantic_v1 import Field, root_validator
 from langchain_core.tools import BaseTool
+from langchain_core.utils import pre_init
+from pydantic import Field
 
 from langchain_community.tools.zapier.prompt import BASE_ZAPIER_TOOL_PROMPT
 from langchain_community.utilities.zapier import ZapierNLAWrapper
 
 
-class ZapierNLARunAction(BaseTool):
+class ZapierNLARunAction(BaseTool):  # type: ignore[override]
     """Tool to run a specific action from the user's exposed actions.
 
     Params:
@@ -105,7 +106,7 @@ class ZapierNLARunAction(BaseTool):
     name: str = ""
     description: str = ""
 
-    @root_validator
+    @pre_init
     def set_name_description(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         zapier_description = values["zapier_description"]
         params_schema = values["params_schema"]
@@ -168,7 +169,7 @@ ZapierNLARunAction.__doc__ = (
 # other useful actions
 
 
-class ZapierNLAListActions(BaseTool):
+class ZapierNLAListActions(BaseTool):  # type: ignore[override]
     """Tool to list all exposed actions for the user."""
 
     name: str = "ZapierNLA_list_actions"

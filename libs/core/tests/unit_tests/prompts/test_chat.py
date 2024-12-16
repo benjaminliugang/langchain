@@ -1,13 +1,17 @@
 import base64
 import tempfile
+import warnings
 from pathlib import Path
-from typing import Any, List, Union
+from typing import Any, Union, cast
 
 import pytest
+from pydantic import ValidationError
+from syrupy import SnapshotAssertion
 
 from langchain_core._api.deprecation import (
     LangChainPendingDeprecationWarning,
 )
+from langchain_core.load import dumpd, load
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -28,11 +32,13 @@ from langchain_core.prompts.chat import (
     SystemMessagePromptTemplate,
     _convert_to_message,
 )
-from langchain_core.pydantic_v1 import ValidationError
+from langchain_core.prompts.string import PromptTemplateFormat
+from langchain_core.utils.pydantic import PYDANTIC_MAJOR_VERSION, PYDANTIC_MINOR_VERSION
+from tests.unit_tests.pydantic_utils import _normalize_schema
 
 
 @pytest.fixture
-def messages() -> List[BaseMessagePromptTemplate]:
+def messages() -> list[BaseMessagePromptTemplate]:
     """Create messages."""
     system_message_prompt = SystemMessagePromptTemplate(
         prompt=PromptTemplate(
@@ -69,7 +75,7 @@ def messages() -> List[BaseMessagePromptTemplate]:
 
 @pytest.fixture
 def chat_prompt_template(
-    messages: List[BaseMessagePromptTemplate],
+    messages: list[BaseMessagePromptTemplate],
 ) -> ChatPromptTemplate:
     """Create a chat prompt template."""
     return ChatPromptTemplate(
@@ -224,7 +230,7 @@ async def test_chat_prompt_template(chat_prompt_template: ChatPromptTemplate) ->
 
 
 def test_chat_prompt_template_from_messages(
-    messages: List[BaseMessagePromptTemplate],
+    messages: list[BaseMessagePromptTemplate],
 ) -> None:
     """Test creating a chat prompt template from messages."""
     chat_prompt_template = ChatPromptTemplate.from_messages(messages)
@@ -295,8 +301,78 @@ def test_chat_prompt_template_from_messages_mustache() -> None:
     ]
 
 
+@pytest.mark.requires("jinja2")
+def test_chat_prompt_template_from_messages_jinja2() -> None:
+    template = ChatPromptTemplate.from_messages(
+        [
+            ("system", "You are a helpful AI bot. Your name is {{ name }}."),
+            ("human", "Hello, how are you doing?"),
+            ("ai", "I'm doing well, thanks!"),
+            ("human", "{{ user_input }}"),
+        ],
+        "jinja2",
+    )
+
+    messages = template.format_messages(name="Bob", user_input="What is your name?")
+
+    assert messages == [
+        SystemMessage(
+            content="You are a helpful AI bot. Your name is Bob.", additional_kwargs={}
+        ),
+        HumanMessage(
+            content="Hello, how are you doing?", additional_kwargs={}, example=False
+        ),
+        AIMessage(
+            content="I'm doing well, thanks!", additional_kwargs={}, example=False
+        ),
+        HumanMessage(content="What is your name?", additional_kwargs={}, example=False),
+    ]
+
+
+@pytest.mark.requires("jinja2")
+@pytest.mark.parametrize(
+    "template_format,image_type_placeholder,image_data_placeholder",
+    [
+        ("f-string", "{image_type}", "{image_data}"),
+        ("mustache", "{{image_type}}", "{{image_data}}"),
+        ("jinja2", "{{ image_type }}", "{{ image_data }}"),
+    ],
+)
+def test_chat_prompt_template_image_prompt_from_message(
+    template_format: PromptTemplateFormat,
+    image_type_placeholder: str,
+    image_data_placeholder: str,
+) -> None:
+    prompt = {
+        "type": "image_url",
+        "image_url": {
+            "url": f"data:{image_type_placeholder};base64, {image_data_placeholder}",
+            "detail": "low",
+        },
+    }
+
+    template = ChatPromptTemplate.from_messages(
+        [("human", [prompt])], template_format=template_format
+    )
+    assert template.format_messages(
+        image_type="image/png", image_data="base64data"
+    ) == [
+        HumanMessage(
+            content=[
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64, base64data",
+                        "detail": "low",
+                    },
+                }
+            ]
+        )
+    ]
+
+
 def test_chat_prompt_template_with_messages(
-    messages: List[BaseMessagePromptTemplate],
+    messages: list[BaseMessagePromptTemplate],
 ) -> None:
     chat_prompt_template = ChatPromptTemplate.from_messages(
         messages + [HumanMessage(content="foo")]
@@ -438,7 +514,7 @@ def test_chat_prompt_template_indexing() -> None:
     message1 = SystemMessage(content="foo")
     message2 = HumanMessage(content="bar")
     message3 = HumanMessage(content="baz")
-    template = ChatPromptTemplate.from_messages([message1, message2, message3])
+    template = ChatPromptTemplate([message1, message2, message3])
     assert template[0] == message1
     assert template[1] == message2
 
@@ -453,7 +529,7 @@ def test_chat_prompt_template_append_and_extend() -> None:
     message1 = SystemMessage(content="foo")
     message2 = HumanMessage(content="bar")
     message3 = HumanMessage(content="baz")
-    template = ChatPromptTemplate.from_messages([message1])
+    template = ChatPromptTemplate([message1])
     template.append(message2)
     template.append(message3)
     assert len(template) == 3
@@ -480,7 +556,7 @@ def test_convert_to_message_is_strict() -> None:
 
 
 def test_chat_message_partial() -> None:
-    template = ChatPromptTemplate.from_messages(
+    template = ChatPromptTemplate(
         [
             ("system", "You are an AI assistant named {name}."),
             ("human", "Hi I'm {user}"),
@@ -564,7 +640,7 @@ async def test_chat_tmpl_from_messages_multipart_text_with_template() -> None:
 async def test_chat_tmpl_from_messages_multipart_image() -> None:
     """Test multipart image URL formatting."""
     base64_image = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAA"
-    other_base64_image = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAA"
+    other_base64_image = "other_iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAA"
     template = ChatPromptTemplate.from_messages(
         [
             ("system", "You are an AI assistant named {name}."),
@@ -608,9 +684,7 @@ async def test_chat_tmpl_from_messages_multipart_image() -> None:
                 },
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{other_base64_image}"
-                    },
+                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
                 },
                 {
                     "type": "image_url",
@@ -646,7 +720,7 @@ async def test_chat_tmpl_from_messages_multipart_image() -> None:
 
 
 async def test_chat_tmpl_from_messages_multipart_formatting_with_path() -> None:
-    """Verify that we can pass `path` for an image as a variable."""
+    """Verify that we cannot pass `path` for an image as a variable."""
     in_mem = "base64mem"
     in_file_data = "base64file01"
 
@@ -673,35 +747,19 @@ async def test_chat_tmpl_from_messages_multipart_formatting_with_path() -> None:
                 ),
             ]
         )
-        expected = [
-            SystemMessage(content="You are an AI assistant named R2D2."),
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": "What's in this image?"},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{in_mem}"},
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{in_file_data}"},
-                    },
-                ]
-            ),
-        ]
-        messages = template.format_messages(
-            name="R2D2",
-            in_mem=in_mem,
-            file_path=temp_file.name,
-        )
-        assert messages == expected
+        with pytest.raises(ValueError):
+            template.format_messages(
+                name="R2D2",
+                in_mem=in_mem,
+                file_path=temp_file.name,
+            )
 
-        messages = await template.aformat_messages(
-            name="R2D2",
-            in_mem=in_mem,
-            file_path=temp_file.name,
-        )
-        assert messages == expected
+        with pytest.raises(ValueError):
+            await template.aformat_messages(
+                name="R2D2",
+                in_mem=in_mem,
+                file_path=temp_file.name,
+            )
 
 
 def test_messages_placeholder() -> None:
@@ -734,14 +792,14 @@ def test_messages_placeholder_with_max() -> None:
 
 
 def test_chat_prompt_message_placeholder_partial() -> None:
-    prompt = ChatPromptTemplate.from_messages([MessagesPlaceholder("history")])
+    prompt = ChatPromptTemplate([MessagesPlaceholder("history")])
     prompt = prompt.partial(history=[("system", "foo")])
     assert prompt.format_messages() == [SystemMessage(content="foo")]
     assert prompt.format_messages(history=[("system", "bar")]) == [
         SystemMessage(content="bar")
     ]
 
-    prompt = ChatPromptTemplate.from_messages(
+    prompt = ChatPromptTemplate(
         [
             MessagesPlaceholder("history", optional=True),
         ]
@@ -752,7 +810,7 @@ def test_chat_prompt_message_placeholder_partial() -> None:
 
 
 def test_chat_prompt_message_placeholder_tuple() -> None:
-    prompt = ChatPromptTemplate.from_messages([("placeholder", "{convo}")])
+    prompt = ChatPromptTemplate([("placeholder", "{convo}")])
     assert prompt.format_messages(convo=[("user", "foo")]) == [
         HumanMessage(content="foo")
     ]
@@ -760,9 +818,7 @@ def test_chat_prompt_message_placeholder_tuple() -> None:
     assert prompt.format_messages() == []
 
     # Is optional = True
-    optional_prompt = ChatPromptTemplate.from_messages(
-        [("placeholder", ["{convo}", False])]
-    )
+    optional_prompt = ChatPromptTemplate([("placeholder", ["{convo}", False])])
     assert optional_prompt.format_messages(convo=[("user", "foo")]) == [
         HumanMessage(content="foo")
     ]
@@ -771,7 +827,7 @@ def test_chat_prompt_message_placeholder_tuple() -> None:
 
 
 async def test_messages_prompt_accepts_list() -> None:
-    prompt = ChatPromptTemplate.from_messages([MessagesPlaceholder("history")])
+    prompt = ChatPromptTemplate([MessagesPlaceholder("history")])
     value = prompt.invoke([("user", "Hi there")])  # type: ignore
     assert value.to_messages() == [HumanMessage(content="Hi there")]
 
@@ -779,7 +835,7 @@ async def test_messages_prompt_accepts_list() -> None:
     assert value.to_messages() == [HumanMessage(content="Hi there")]
 
     # Assert still raises a nice error
-    prompt = ChatPromptTemplate.from_messages(
+    prompt = ChatPromptTemplate(
         [("system", "You are a {foo}"), MessagesPlaceholder("history")]
     )
     with pytest.raises(TypeError):
@@ -789,609 +845,134 @@ async def test_messages_prompt_accepts_list() -> None:
         await prompt.ainvoke([("user", "Hi there")])  # type: ignore
 
 
-def test_chat_input_schema() -> None:
-    prompt_all_required = ChatPromptTemplate.from_messages(
+def test_chat_input_schema(snapshot: SnapshotAssertion) -> None:
+    prompt_all_required = ChatPromptTemplate(
         messages=[MessagesPlaceholder("history", optional=False), ("user", "${input}")]
     )
-    prompt_all_required.input_variables == {"input"}
-    prompt_all_required.optional_variables == {"history"}
+    assert set(prompt_all_required.input_variables) == {"input", "history"}
+    assert prompt_all_required.optional_variables == []
     with pytest.raises(ValidationError):
         prompt_all_required.input_schema(input="")
-    assert prompt_all_required.input_schema.schema() == {
-        "title": "PromptInput",
-        "type": "object",
-        "properties": {
-            "history": {
-                "title": "History",
-                "type": "array",
-                "items": {
-                    "anyOf": [
-                        {"$ref": "#/definitions/AIMessage"},
-                        {"$ref": "#/definitions/HumanMessage"},
-                        {"$ref": "#/definitions/ChatMessage"},
-                        {"$ref": "#/definitions/SystemMessage"},
-                        {"$ref": "#/definitions/FunctionMessage"},
-                        {"$ref": "#/definitions/ToolMessage"},
-                    ]
-                },
-            },
-            "input": {"title": "Input", "type": "string"},
-        },
-        "required": ["history", "input"],
-        "definitions": {
-            "ToolCall": {
-                "title": "ToolCall",
-                "type": "object",
-                "properties": {
-                    "name": {"title": "Name", "type": "string"},
-                    "args": {"title": "Args", "type": "object"},
-                    "id": {"title": "Id", "type": "string"},
-                },
-                "required": ["name", "args", "id"],
-            },
-            "InvalidToolCall": {
-                "title": "InvalidToolCall",
-                "type": "object",
-                "properties": {
-                    "name": {"title": "Name", "type": "string"},
-                    "args": {"title": "Args", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "error": {"title": "Error", "type": "string"},
-                },
-                "required": ["name", "args", "id", "error"],
-            },
-            "UsageMetadata": {
-                "title": "UsageMetadata",
-                "type": "object",
-                "properties": {
-                    "input_tokens": {"title": "Input Tokens", "type": "integer"},
-                    "output_tokens": {"title": "Output Tokens", "type": "integer"},
-                    "total_tokens": {"title": "Total Tokens", "type": "integer"},
-                },
-                "required": ["input_tokens", "output_tokens", "total_tokens"],
-            },
-            "AIMessage": {
-                "title": "AIMessage",
-                "description": "Message from an AI.\n\nAIMessage is returned from a chat model as a response to a prompt.\n\nThis message represents the output of the model and consists of both\nthe raw output as returned by the model together standardized fields\n(e.g., tool calls, usage metadata) added by the LangChain framework.",  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "ai",
-                        "enum": ["ai"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "example": {
-                        "title": "Example",
-                        "default": False,
-                        "type": "boolean",
-                    },
-                    "tool_calls": {
-                        "title": "Tool Calls",
-                        "default": [],
-                        "type": "array",
-                        "items": {"$ref": "#/definitions/ToolCall"},
-                    },
-                    "invalid_tool_calls": {
-                        "title": "Invalid Tool Calls",
-                        "default": [],
-                        "type": "array",
-                        "items": {"$ref": "#/definitions/InvalidToolCall"},
-                    },
-                    "usage_metadata": {"$ref": "#/definitions/UsageMetadata"},
-                },
-                "required": ["content"],
-            },
-            "HumanMessage": {
-                "title": "HumanMessage",
-                "description": 'Message from a human.\n\nHumanMessages are messages that are passed in from a human to the model.\n\nExample:\n\n    .. code-block:: python\n\n        from langchain_core.messages import HumanMessage, SystemMessage\n\n        messages = [\n            SystemMessage(\n                content="You are a helpful assistant! Your name is Bob."\n            ),\n            HumanMessage(\n                content="What is your name?"\n            )\n        ]\n\n        # Instantiate a chat model and invoke it with the messages\n        model = ...\n        print(model.invoke(messages))',  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "human",
-                        "enum": ["human"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "example": {
-                        "title": "Example",
-                        "default": False,
-                        "type": "boolean",
-                    },
-                },
-                "required": ["content"],
-            },
-            "ChatMessage": {
-                "title": "ChatMessage",
-                "description": "Message that can be assigned an arbitrary speaker (i.e. role).",  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "chat",
-                        "enum": ["chat"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "role": {"title": "Role", "type": "string"},
-                },
-                "required": ["content", "role"],
-            },
-            "SystemMessage": {
-                "title": "SystemMessage",
-                "description": 'Message for priming AI behavior.\n\nThe system message is usually passed in as the first of a sequence\nof input messages.\n\nExample:\n\n    .. code-block:: python\n\n        from langchain_core.messages import HumanMessage, SystemMessage\n\n        messages = [\n            SystemMessage(\n                content="You are a helpful assistant! Your name is Bob."\n            ),\n            HumanMessage(\n                content="What is your name?"\n            )\n        ]\n\n        # Define a chat model and invoke it with the messages\n        print(model.invoke(messages))',  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "system",
-                        "enum": ["system"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                },
-                "required": ["content"],
-            },
-            "FunctionMessage": {
-                "title": "FunctionMessage",
-                "description": "Message for passing the result of executing a tool back to a model.\n\nFunctionMessage are an older version of the ToolMessage schema, and\ndo not contain the tool_call_id field.\n\nThe tool_call_id field is used to associate the tool call request with the\ntool call response. This is useful in situations where a chat model is able\nto request multiple tool calls in parallel.",  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "function",
-                        "enum": ["function"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                },
-                "required": ["content", "name"],
-            },
-            "ToolMessage": {
-                "title": "ToolMessage",
-                "description": "Message for passing the result of executing a tool back to a model.\n\nToolMessages contain the result of a tool invocation. Typically, the result\nis encoded inside the `content` field.\n\nExample: A TooMessage representing a result of 42 from a tool call with id\n\n    .. code-block:: python\n\n        from langchain_core.messages import ToolMessage\n\n        ToolMessage(content='42', tool_call_id='call_Jja7J89XsjrOLA5r!MEOW!SL')\n\nThe tool_call_id field is used to associate the tool call request with the\ntool call response. This is useful in situations where a chat model is able\nto request multiple tool calls in parallel.",  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "tool",
-                        "enum": ["tool"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "tool_call_id": {"title": "Tool Call Id", "type": "string"},
-                },
-                "required": ["content", "tool_call_id"],
-            },
-        },
-    }
 
-    prompt_optional = ChatPromptTemplate.from_messages(
+    if (PYDANTIC_MAJOR_VERSION, PYDANTIC_MINOR_VERSION) >= (2, 10):
+        assert _normalize_schema(
+            prompt_all_required.get_input_jsonschema()
+        ) == snapshot(name="required")
+    prompt_optional = ChatPromptTemplate(
         messages=[MessagesPlaceholder("history", optional=True), ("user", "${input}")]
     )
-    prompt_optional.input_variables == {"history", "input"}
+    # input variables only lists required variables
+    assert set(prompt_optional.input_variables) == {"input"}
     prompt_optional.input_schema(input="")  # won't raise error
-    prompt_optional.input_schema.schema() == {
+
+    if (PYDANTIC_MAJOR_VERSION, PYDANTIC_MINOR_VERSION) >= (2, 10):
+        assert _normalize_schema(prompt_optional.get_input_jsonschema()) == snapshot(
+            name="partial"
+        )
+
+
+def test_chat_prompt_w_msgs_placeholder_ser_des(snapshot: SnapshotAssertion) -> None:
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", "foo"), MessagesPlaceholder("bar"), ("human", "baz")]
+    )
+    assert dumpd(MessagesPlaceholder("bar")) == snapshot(name="placeholder")
+    assert load(dumpd(MessagesPlaceholder("bar"))) == MessagesPlaceholder("bar")
+    assert dumpd(prompt) == snapshot(name="chat_prompt")
+    assert load(dumpd(prompt)) == prompt
+
+
+async def test_chat_tmpl_serdes(snapshot: SnapshotAssertion) -> None:
+    """Test chat prompt template ser/des."""
+    template = ChatPromptTemplate(
+        [
+            ("system", "You are an AI assistant named {name}."),
+            ("system", [{"text": "You are an AI assistant named {name}."}]),
+            SystemMessagePromptTemplate.from_template("you are {foo}"),
+            cast(
+                tuple,
+                (
+                    "human",
+                    [
+                        "hello",
+                        {"text": "What's in this image?"},
+                        {"type": "text", "text": "What's in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": "data:image/jpeg;base64,{my_image}",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/jpeg;base64,{my_image}"},
+                        },
+                        {"type": "image_url", "image_url": "{my_other_image}"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "{my_other_image}",
+                                "detail": "medium",
+                            },
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://www.langchain.com/image.png"},
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/jpeg;base64,foobar"},
+                        },
+                        {"image_url": {"url": "data:image/jpeg;base64,foobar"}},
+                    ],
+                ),
+            ),
+            ("placeholder", "{chat_history}"),
+            MessagesPlaceholder("more_history", optional=False),
+        ]
+    )
+    assert dumpd(template) == snapshot()
+    assert load(dumpd(template)) == template
+
+
+def test_chat_prompt_template_variable_names() -> None:
+    """This test was written for an edge case that triggers a warning from Pydantic.
+
+    Verify that no run time warnings are raised.
+    """
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")  # Cause all warnings to always be triggered
+        prompt = ChatPromptTemplate([("system", "{schema}")])
+        prompt.get_input_schema()
+
+    if record:
+        error_msg = []
+        for warning in record:
+            error_msg.append(
+                f"Warning type: {warning.category.__name__}, "
+                f"Warning message: {warning.message}, "
+                f"Warning location: {warning.filename}:{warning.lineno}"
+            )
+        msg = "\n".join(error_msg)
+    else:
+        msg = ""
+
+    assert list(record) == [], msg
+
+    # Verify value errors raised from illegal names
+    assert ChatPromptTemplate(
+        [("system", "{_private}")]
+    ).get_input_schema().model_json_schema() == {
+        "properties": {"_private": {"title": "Private", "type": "string"}},
+        "required": ["_private"],
         "title": "PromptInput",
         "type": "object",
+    }
+
+    assert ChatPromptTemplate(
+        [("system", "{model_json_schema}")]
+    ).get_input_schema().model_json_schema() == {
         "properties": {
-            "input": {"title": "Input", "type": "string"},
-            "history": {
-                "title": "History",
-                "type": "array",
-                "items": {
-                    "anyOf": [
-                        {"$ref": "#/definitions/AIMessage"},
-                        {"$ref": "#/definitions/HumanMessage"},
-                        {"$ref": "#/definitions/ChatMessage"},
-                        {"$ref": "#/definitions/SystemMessage"},
-                        {"$ref": "#/definitions/FunctionMessage"},
-                        {"$ref": "#/definitions/ToolMessage"},
-                    ]
-                },
-            },
+            "model_json_schema": {"title": "Model Json Schema", "type": "string"}
         },
-        "required": ["input"],
-        "definitions": {
-            "ToolCall": {
-                "title": "ToolCall",
-                "type": "object",
-                "properties": {
-                    "name": {"title": "Name", "type": "string"},
-                    "args": {"title": "Args", "type": "object"},
-                    "id": {"title": "Id", "type": "string"},
-                },
-                "required": ["name", "args", "id"],
-            },
-            "InvalidToolCall": {
-                "title": "InvalidToolCall",
-                "type": "object",
-                "properties": {
-                    "name": {"title": "Name", "type": "string"},
-                    "args": {"title": "Args", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "error": {"title": "Error", "type": "string"},
-                },
-                "required": ["name", "args", "id", "error"],
-            },
-            "UsageMetadata": {
-                "title": "UsageMetadata",
-                "type": "object",
-                "properties": {
-                    "input_tokens": {"title": "Input Tokens", "type": "integer"},
-                    "output_tokens": {"title": "Output Tokens", "type": "integer"},
-                    "total_tokens": {"title": "Total Tokens", "type": "integer"},
-                },
-                "required": ["input_tokens", "output_tokens", "total_tokens"],
-            },
-            "AIMessage": {
-                "title": "AIMessage",
-                "description": "Message from an AI.\n\nAIMessage is returned from a chat model as a response to a prompt.\n\nThis message represents the output of the model and consists of both\nthe raw output as returned by the model together standardized fields\n(e.g., tool calls, usage metadata) added by the LangChain framework.",  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "ai",
-                        "enum": ["ai"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "example": {
-                        "title": "Example",
-                        "default": False,
-                        "type": "boolean",
-                    },
-                    "tool_calls": {
-                        "title": "Tool Calls",
-                        "default": [],
-                        "type": "array",
-                        "items": {"$ref": "#/definitions/ToolCall"},
-                    },
-                    "invalid_tool_calls": {
-                        "title": "Invalid Tool Calls",
-                        "default": [],
-                        "type": "array",
-                        "items": {"$ref": "#/definitions/InvalidToolCall"},
-                    },
-                    "usage_metadata": {"$ref": "#/definitions/UsageMetadata"},
-                },
-                "required": ["content"],
-            },
-            "HumanMessage": {
-                "title": "HumanMessage",
-                "description": 'Message from a human.\n\nHumanMessages are messages that are passed in from a human to the model.\n\nExample:\n\n    .. code-block:: python\n\n        from langchain_core.messages import HumanMessage, SystemMessage\n\n        messages = [\n            SystemMessage(\n                content="You are a helpful assistant! Your name is Bob."\n            ),\n            HumanMessage(\n                content="What is your name?"\n            )\n        ]\n\n        # Instantiate a chat model and invoke it with the messages\n        model = ...\n        print(model.invoke(messages))',  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "human",
-                        "enum": ["human"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "example": {
-                        "title": "Example",
-                        "default": False,
-                        "type": "boolean",
-                    },
-                },
-                "required": ["content"],
-            },
-            "ChatMessage": {
-                "title": "ChatMessage",
-                "description": "Message that can be assigned an arbitrary speaker (i.e. role).",  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "chat",
-                        "enum": ["chat"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "role": {"title": "Role", "type": "string"},
-                },
-                "required": ["content", "role"],
-            },
-            "SystemMessage": {
-                "title": "SystemMessage",
-                "description": 'Message for priming AI behavior.\n\nThe system message is usually passed in as the first of a sequence\nof input messages.\n\nExample:\n\n    .. code-block:: python\n\n        from langchain_core.messages import HumanMessage, SystemMessage\n\n        messages = [\n            SystemMessage(\n                content="You are a helpful assistant! Your name is Bob."\n            ),\n            HumanMessage(\n                content="What is your name?"\n            )\n        ]\n\n        # Define a chat model and invoke it with the messages\n        print(model.invoke(messages))',  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "system",
-                        "enum": ["system"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                },
-                "required": ["content"],
-            },
-            "FunctionMessage": {
-                "title": "FunctionMessage",
-                "description": "Message for passing the result of executing a tool back to a model.\n\nFunctionMessage are an older version of the ToolMessage schema, and\ndo not contain the tool_call_id field.\n\nThe tool_call_id field is used to associate the tool call request with the\ntool call response. This is useful in situations where a chat model is able\nto request multiple tool calls in parallel.",  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]  # noqa: E501
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "function",
-                        "enum": ["function"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                },
-                "required": ["content", "name"],
-            },
-            "ToolMessage": {
-                "title": "ToolMessage",
-                "description": "Message for passing the result of executing a tool back to a model.\n\nToolMessages contain the result of a tool invocation. Typically, the result\nis encoded inside the `content` field.\n\nExample: A TooMessage representing a result of 42 from a tool call with id\n\n    .. code-block:: python\n\n        from langchain_core.messages import ToolMessage\n\n        ToolMessage(content='42', tool_call_id='call_Jja7J89XsjrOLA5r!MEOW!SL')\n\nThe tool_call_id field is used to associate the tool call request with the\ntool call response. This is useful in situations where a chat model is able\nto request multiple tool calls in parallel.",  # noqa: E501
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "title": "Content",
-                        "anyOf": [
-                            {"type": "string"},
-                            {
-                                "type": "array",
-                                "items": {
-                                    "anyOf": [{"type": "string"}, {"type": "object"}]
-                                },
-                            },
-                        ],
-                    },
-                    "additional_kwargs": {
-                        "title": "Additional Kwargs",
-                        "type": "object",
-                    },
-                    "response_metadata": {
-                        "title": "Response Metadata",
-                        "type": "object",
-                    },
-                    "type": {
-                        "title": "Type",
-                        "default": "tool",
-                        "enum": ["tool"],
-                        "type": "string",
-                    },
-                    "name": {"title": "Name", "type": "string"},
-                    "id": {"title": "Id", "type": "string"},
-                    "tool_call_id": {"title": "Tool Call Id", "type": "string"},
-                },
-                "required": ["content", "tool_call_id"],
-            },
-        },
+        "required": ["model_json_schema"],
+        "title": "PromptInput",
+        "type": "object",
     }
